@@ -5,9 +5,10 @@ const NotFoundError = require('../../exceptions/NotFoundError');
 const AuthorizationError = require('../../exceptions/AuthorizationError');
 
 class PlaylistsService {
-    constructor(collborationsService) {
+    constructor(collborationsService, cacheService) {
         this._pool = new Pool();
         this._collaborationsService = collborationsService;
+        this._cacheService = cacheService;
     }
 
     async addPlaylist({ name, owner }) {
@@ -61,7 +62,7 @@ class PlaylistsService {
         };
 
         const result = await this._pool.query(query);
-        
+
         if (!result.rowCount) {
             throw new NotFoundError('Playlist tidak ditemukan');
         }
@@ -73,7 +74,7 @@ class PlaylistsService {
     }
 
     async verifyPlaylistAccess(playlistId, userId) {
-        try{
+        try {
             await this.verifyPlaylistOwner(playlistId, userId);
         } catch (error) {
             if (error instanceof NotFoundError) {
@@ -100,19 +101,28 @@ class PlaylistsService {
         if (!result.rows[0].id) {
             throw new InvariantError('Lagu gagal ditambahkan ke playlist');
         }
+
+        await this._cacheService.delete(`playlist:${playlistId}`);
         return result.rows[0].id;
     }
 
     async getSong(id) {
-        const query = {
-            text: `SELECT songs.id, songs.title, songs.performer FROM playlistsongs
-             JOIN songs ON songs.id = playlistsongs.song_id WHERE playlistsongs.playlist_id = $1
-             GROUP BY playlistsongs.song_id, songs.id`,
-            values: [id],
-        };
+        try {
+            const result = await this._cacheService.get(`playlist:${owner}`);
+            return JSON.parse(result);
+        } catch (error) {
+            const query = {
+                text: `SELECT songs.id, songs.title, songs.performer FROM playlistsongs
+                        JOIN songs ON songs.id = playlistsongs.song_id WHERE playlistsongs.playlist_id = $1
+                       GROUP BY playlistsongs.song_id, songs.id`,
+                values: [id],
+            };
 
-        const result = await this._pool.query(query);
-        return result.rows;
+            const result = await this._pool.query(query);
+
+            await this._cacheService.set(`playlist:${id}`, JSON.stringify(result));
+            return result.rows;
+        }
     }
 
     async deleteSong(playlistId, songId) {
@@ -126,18 +136,21 @@ class PlaylistsService {
         if (!result.rowCount) {
             throw new InvariantError('Lagu gagal dihapus dari playlist.');
         }
+
+        const { owner } = result.rows[0];
+        await this._cacheService.delete(`playlist:${playlistId}`);
     }
 
     async verifyPlaylistsongs(playlistId, songId) {
         const query = {
-          text: 'SELECT * FROM playlistsongs WHERE playlist_id = $1 AND song_id = $2',
-          values: [playlistId, songId],
+            text: 'SELECT * FROM playlistsongs WHERE playlist_id = $1 AND song_id = $2',
+            values: [playlistId, songId],
         };
-     
+
         const result = await this._pool.query(query);
-     
+
         if (!result.rowCount) {
-          throw new InvariantError('Lagu gagal diverifikasi');
+            throw new InvariantError('Lagu gagal diverifikasi');
         }
     }
 }
